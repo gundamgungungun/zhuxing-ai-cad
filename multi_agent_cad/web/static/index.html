@@ -1,0 +1,284 @@
+<!doctype html>
+<!-- /* finesse · register=product · sub=ai-workbench · shell=canvas-dominant-three-column */ -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="description" content="铸形，许子涵的智能参数化机械设计工作台" />
+  <title>铸形 · 智能机械设计工作台</title>
+  <link rel="icon" href="/favicon.svg?v=7" />
+  <link rel="stylesheet" href="/styles.css?v=7" />
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#prompt">跳到建模输入</a>
+
+  <div class="app-shell">
+    <header class="app-topbar">
+      <a class="brand" href="#workspace" aria-label="铸形工作台首页">
+        <img class="brand-mark" src="/favicon.svg?v=7" alt="" />
+        <span class="brand-lockup">
+          <strong>铸形</strong>
+          <span>FORMFORGE</span>
+        </span>
+      </a>
+
+      <nav class="topbar-context" aria-label="工作台导航">
+        <a class="active" href="#workspace">建模工作台</a>
+        <a href="#output-title">三维预览</a>
+        <a href="#files-title">工程产物</a>
+      </nav>
+
+      <div class="topbar-meta" aria-label="系统状态">
+        <span class="runtime-chip"><i aria-hidden="true"></i>本地引擎就绪</span>
+        <span class="format-chip">STEP · STL · GLB</span>
+      </div>
+    </header>
+
+    <main id="workspace" class="studio-layout">
+      <aside class="control-panel" aria-labelledby="config-title">
+        <div class="panel-scroll">
+          <header class="control-heading">
+            <div>
+              <p class="section-label">NEW BUILD</p>
+              <h1 id="config-title">定义零件</h1>
+            </div>
+            <span class="task-badge">新任务</span>
+          </header>
+
+          <section class="task-card" aria-labelledby="request-title">
+            <div class="card-heading">
+              <div>
+                <h2 id="request-title">建模需求</h2>
+                <p>描述尺寸、特征、材料或装配关系，工程智能体会拆解并建模。</p>
+              </div>
+              <span class="required-mark">必填</span>
+            </div>
+
+            <label class="prompt-label" for="prompt">零件描述</label>
+            <textarea id="prompt" rows="8" aria-describedby="prompt-help prompt-error" placeholder="例如：生成一个长 120 mm、宽 60 mm、厚 8 mm 的安装板，四角各有一个 Ø8 通孔……"></textarea>
+            <p id="prompt-error" class="field-error" role="alert"></p>
+            <p id="prompt-help" class="field-help">建议写明单位、关键尺寸、孔槽特征和必须满足的约束。</p>
+
+            <div class="field-grid">
+              <label for="workflow">工作流
+                <select id="workflow">
+                  <option value="original">标准生成，失败时自动修复</option>
+                  <option value="aider">修改已有 temp_design*.py</option>
+                </select>
+              </label>
+              <label for="dest_path">结果目录（可选）
+                <input type="text" id="dest_path" placeholder="留空则临时保存" />
+              </label>
+            </div>
+
+            <div class="delivery-note">
+              <span aria-hidden="true">↳</span>
+              <p>成功后交付 STEP、STL、GLB、Python 源码和质检结果。</p>
+            </div>
+          </section>
+
+          <div class="settings-stack" aria-label="建模设置">
+            <details id="api-settings" class="settings-group">
+              <summary class="summary-with-status">
+                <span class="summary-copy"><small>连接</small><strong>模型服务与 API 密钥</strong></span>
+                <span id="api-key-status" class="secret-status" aria-live="polite">正在检查…</span>
+              </summary>
+              <div class="details-body">
+                <label for="provider">模型服务商
+                  <select id="provider">
+                    <option value="qwen">通义千问（阿里云百炼，默认）</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="ollama">本地 Ollama</option>
+                  </select>
+                </label>
+                <label for="api_key">API 密钥
+                  <input type="password" id="api_key" placeholder="输入 API Key" autocomplete="off" />
+                </label>
+                <div class="credential-actions">
+                  <button type="button" id="save-api-key" class="small-btn primary">保存密钥</button>
+                  <button type="button" id="clear-api-key" class="small-btn secondary">清除</button>
+                </div>
+                <label for="DS_BASE_URL">接口地址
+                  <input type="text" id="DS_BASE_URL" />
+                </label>
+                <p id="api-key-help" class="field-help">密钥仅保存在当前浏览器，不写入项目文件。共享电脑请勿保存。</p>
+                <p class="field-help">切换服务商会自动填写接口地址和建议模型。</p>
+              </div>
+            </details>
+
+            <details class="settings-group">
+              <summary>
+                <span class="summary-copy"><small>模型</small><strong>各阶段模型设置</strong></span>
+              </summary>
+              <div class="details-body table-scroll">
+                <table id="stage-table">
+                  <thead><tr><th>阶段</th><th>模型</th><th>温度</th><th>Token</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </details>
+
+            <details class="settings-group">
+              <summary>
+                <span class="summary-copy"><small>容错</small><strong>重试设置</strong></span>
+              </summary>
+              <div class="details-body compact-fields">
+                <label for="MAX_RETRIES">模型重试次数
+                  <input type="number" id="MAX_RETRIES" />
+                </label>
+                <label for="MAX_EXEC_RETRIES">执行重试次数
+                  <input type="number" id="MAX_EXEC_RETRIES" />
+                </label>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <div class="composer-actions">
+          <p id="autosave-note">参数在本机处理，生成期间可随时停止。</p>
+          <div class="action-row">
+            <button id="run-btn" type="button">
+              <span class="run-label">开始生成</span>
+              <span aria-hidden="true">→</span>
+            </button>
+            <button id="stop-btn" type="button" disabled>■ 停止</button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="stage-panel" aria-labelledby="output-title">
+        <header class="stage-heading">
+          <div>
+            <p class="section-label">GEOMETRY REVIEW</p>
+            <h2 id="output-title">三维结果</h2>
+          </div>
+          <div id="status" class="status" data-tone="ready" aria-live="polite">
+            <span class="status-pulse" aria-hidden="true"></span>
+            <span>等待开始</span>
+          </div>
+        </header>
+
+        <div id="viewer-wrap">
+          <div class="viewport-meta">
+            <span>INTERACTIVE 3D VIEWPORT</span>
+            <span>GLB / LIVE</span>
+          </div>
+          <model-viewer id="mv" camera-controls shadow-intensity="1" environment-intensity="1" alt="生成的三维模型"></model-viewer>
+
+          <div class="viewer-empty">
+            <svg class="transmission-plate" viewBox="0 0 560 350" role="img" aria-labelledby="plate-title plate-desc">
+              <title id="plate-title">三速平行轴变速器装配原理图</title>
+              <desc id="plate-desc">输入轴和输出轴通过三组常啮合齿轮传递动力</desc>
+              <defs>
+                <g id="plate-gear">
+                  <circle class="gear-teeth" r="42" />
+                  <circle class="gear-rim" r="32" />
+                  <circle class="gear-hub" r="10" />
+                  <path class="gear-spokes" d="M0-30V-11M21-21L8-8M30 0H11M21 21L8 8M0 30V11M-21 21L-8 8M-30 0H-11M-21-21L-8-8" />
+                </g>
+              </defs>
+              <g class="plate-grid"><path d="M30 58H530M30 292H530M62 30V320M498 30V320" /><path d="M42 112H518M42 238H518" /></g>
+              <rect class="plate-housing" x="72" y="84" width="416" height="182" rx="22" />
+              <path class="plate-shaft" d="M82 139H478M82 213H478" />
+              <g class="gear-one"><use href="#plate-gear" transform="translate(165 139) scale(.72)" /></g>
+              <g class="gear-two"><use href="#plate-gear" transform="translate(165 213) scale(1.08)" /></g>
+              <g class="gear-three"><use href="#plate-gear" transform="translate(280 139) scale(.93)" /></g>
+              <g class="gear-four"><use href="#plate-gear" transform="translate(280 213) scale(.93)" /></g>
+              <g class="gear-five"><use href="#plate-gear" transform="translate(395 139) scale(1.08)" /></g>
+              <g class="gear-six"><use href="#plate-gear" transform="translate(395 213) scale(.72)" /></g>
+              <path class="plate-dimension" d="M118 300H442M118 293V307M442 293V307" />
+              <text class="plate-text" x="214" y="325">PARALLEL SHAFT · 3 SPEED</text>
+            </svg>
+            <div class="empty-message">
+              <strong>模型会在这里生成</strong>
+              <span>完成后可拖动旋转、滚轮缩放并下载工程文件</span>
+            </div>
+          </div>
+
+          <div class="viewer-corner viewer-corner-a" aria-hidden="true"></div>
+          <div class="viewer-corner viewer-corner-b" aria-hidden="true"></div>
+        </div>
+      </section>
+
+      <aside class="evidence-panel" aria-label="任务进度与工程产物">
+        <section class="evidence-card run-card" aria-labelledby="run-title">
+          <div class="evidence-heading">
+            <div>
+              <h2 id="run-title">任务进度</h2>
+            </div>
+            <span id="run-state-chip" class="state-chip" data-state="ready">待命</span>
+          </div>
+
+          <ol id="run-steps" class="run-steps">
+            <li data-stage="planner" data-state="queued">
+              <span class="step-icon" aria-hidden="true">01</span>
+              <div><strong>解析工程需求</strong><span>尺寸、特征与约束</span></div>
+              <time>待命</time>
+            </li>
+            <li data-stage="architect" data-state="queued">
+              <span class="step-icon" aria-hidden="true">02</span>
+              <div><strong>规划几何结构</strong><span>实体关系与建模顺序</span></div>
+              <time>待命</time>
+            </li>
+            <li data-stage="coder" data-state="queued">
+              <span class="step-icon" aria-hidden="true">03</span>
+              <div><strong>生成 CAD 模型</strong><span>build123d 参数化代码</span></div>
+              <time>待命</time>
+            </li>
+            <li data-stage="autonomous_skill_loop" data-state="queued">
+              <span class="step-icon" aria-hidden="true">04</span>
+              <div><strong>质检与自动修复</strong><span>几何验证和失败重试</span></div>
+              <time>待命</time>
+            </li>
+          </ol>
+
+          <div id="run-receipt" class="run-receipt" aria-label="本次任务消耗">
+            <span><small>用时</small><strong id="elapsed-time">0:00</strong></span>
+            <span><small>Token</small><strong id="token-receipt">—</strong></span>
+            <span><small>API</small><strong id="api-receipt">—</strong></span>
+          </div>
+        </section>
+
+        <section class="evidence-card result-block" aria-labelledby="files-title">
+          <div class="evidence-heading compact">
+            <div>
+              <h2 id="files-title">工程文件</h2>
+            </div>
+            <span class="artifact-count" id="artifact-count">0</span>
+          </div>
+          <div id="downloads" class="downloads">
+            <div class="empty-state">
+              <span class="empty-state-icon" aria-hidden="true">↳</span>
+              <p><strong>还没有工程文件</strong><span>完成建模后可在这里下载。</span></p>
+            </div>
+          </div>
+          <div id="stats" class="stats"></div>
+        </section>
+
+        <details class="evidence-card console-group" open>
+          <summary>
+            <span><small>PROCESS LOG</small><strong>运行记录</strong></span>
+            <span class="console-toggle">展开 / 收起</span>
+          </summary>
+          <pre id="log" class="log">// 铸形 FORMFORGE READY
+// 等待新的建模任务</pre>
+        </details>
+
+        <section class="brand-plate" aria-label="铸形工作台说明">
+          <img src="/favicon.svg?v=7" alt="" />
+          <div>
+            <strong>铸形 · FORMFORGE</strong>
+            <span>把工程意图铸造成可制造的几何</span>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="/app.js?v=7"></script>
+</body>
+</html>

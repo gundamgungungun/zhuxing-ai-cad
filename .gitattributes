@@ -1,0 +1,25 @@
+# Treat generated CAD and media assets as binary files. This project keeps
+# its current, GitHub-compatible assets in regular Git so no Git LFS client
+# is required for cloning or publishing the repository.
+assets/** -text
+benchmarks/** -text
+assets/**/*.md text
+benchmarks/**/*.md text
+*.step -text
+*.stp -text
+*.stl -text
+*.3mf -text
+*.gcode -text
+*.gcode.3mf -text
+*.dxf -text
+*.glb -text
+*.gltf -text
+*.obj -text
+*.ply -text
+*.mp4 -text
+docs/public/hero/**/*.glb -text
+.*.step.glb -text
+.*.stp.glb -text
+**/.*.step/**/*.glb -text
+**/.*.step/topology.bin -text
+**/.*.step/topology.json -text
