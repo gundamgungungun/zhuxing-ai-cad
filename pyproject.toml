@@ -33,8 +33,9 @@ dependencies = [
     "pydantic>=2.5",
     # LLM clients (OpenAI-compatible — DashScope / Qwen / OpenAI / DeepSeek)
     "openai>=1.20.0",
-    # Autonomous code repair engine
-    "aider-chat>=0.50",
+    # The autonomous repair engine (aider-chat==0.82.3) is installed
+    # separately with --no-deps; its upstream numpy pin conflicts with
+    # build123d. See README / README_cn for the verified install command.
     # Optional fallback provider (Claude)
     "anthropic>=0.30",
 ]
