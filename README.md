@@ -1,8 +1,31 @@
-# 铸形
+# 铸形 FormForge
 
-Online app: **[Launch FormForge](https://sqr2cc59brf4q673gep7n.apigateway-cn-beijing.volceapi.com/)**
+铸形是一个面向机械设计的 AI 文生 CAD 工作台。用户只需用自然语言描述零件
+的尺寸、结构和约束，系统就会自动理解需求、规划建模步骤、生成参数化 CAD
+代码，并对结果进行检查和修复。
 
-The hosted app uses a bring-your-own-key (BYOK) model. Each visitor supplies
-their own model-provider API key; it is kept only in the current page and task
-memory, never in the repository, persistent browser storage, server files, or a
-database.
+**[打开在线版本](https://sqr2cc59brf4q673gep7n.apigateway-cn-beijing.volceapi.com/)**
+
+## 主要能力
+
+- 根据自然语言生成机械零件和基础装配结构。
+- 通过多个 AI 阶段完成需求解析、几何规划、代码生成和自动修复。
+- 在浏览器中查看可旋转、缩放的三维模型。
+- 导出 STEP、STL、GLB、Python 源码和质量检查结果。
+- 支持通义千问、OpenAI、DeepSeek 和 Gemini 等兼容模型服务。
+
+## 使用方式
+
+打开在线版本，选择模型服务商并输入你自己的 API Key，然后描述需要生成的
+零件。任务完成后，可以直接预览三维结果并下载工程文件。
+
+## 密钥与隐私
+
+在线版采用 BYOK（自带密钥）模式，不提供或保存站点所有者的模型密钥。访客
+输入的 API Key 仅在当前页面和本次任务内存中使用，刷新页面后即被清除，不会
+写入仓库、浏览器持久存储、服务端文件或数据库。
+
+## 说明
+
+铸形目前是辅助设计工具。生成结果在用于生产、加工或安全关键场景前，应由
+具备相应经验的工程人员复核。
