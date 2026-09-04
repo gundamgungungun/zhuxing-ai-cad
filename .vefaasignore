@@ -1,0 +1,47 @@
+# Never upload repository history, local credentials, or deployment linkage.
+.git/
+.github/
+.vefaas/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local development state and generated artifacts.
+.DS_Store
+.finesse/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+.venv/
+.venv_311/
+venv/
+env/
+tmp/
+outputs/
+pipeline_cache/
+tests/
+*.log
+*.jsonl
+temp_output_*.step
+temp_output_*.stp
+temp_output_*.stl
+temp_output_*.3mf
+temp_measurements_*.json
+temp_missed_*.json
+
+# Not required by the hosted runtime.
+assets/
+docs/
+legacy_refs/
+Dockerfile
+.dockerignore
+DEPLOYMENT_VOLCENGINE.md
+启动文生CAD.command

@@ -9,7 +9,10 @@
   <title>铸形 · 智能机械设计工作台</title>
   <link rel="icon" href="/favicon.svg?v=7" />
   <link rel="stylesheet" href="/styles.css?v=7" />
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+  <script type="module"
+          src="https://unpkg.com/@google/model-viewer@4.3.1/dist/model-viewer.min.js"
+          integrity="sha384-cprcVQt7wbUl0xngF3PGP6yBB7n4/t+4AoAMG9biiMCGFiWOdzUH10Ie2COTqFNW"
+          crossorigin="anonymous"></script>
 </head>
 <body>
   <a class="skip-link" href="#prompt">跳到建模输入</a>
@@ -68,9 +71,6 @@
                   <option value="aider">修改已有 temp_design*.py</option>
                 </select>
               </label>
-              <label for="dest_path">结果目录（可选）
-                <input type="text" id="dest_path" placeholder="留空则临时保存" />
-              </label>
             </div>
 
             <div class="delivery-note">
@@ -82,7 +82,7 @@
           <div class="settings-stack" aria-label="建模设置">
             <details id="api-settings" class="settings-group">
               <summary class="summary-with-status">
-                <span class="summary-copy"><small>连接</small><strong>模型服务与 API 密钥</strong></span>
+                <span class="summary-copy"><small>连接</small><strong>模型服务</strong></span>
                 <span id="api-key-status" class="secret-status" aria-live="polite">正在检查…</span>
               </summary>
               <div class="details-body">
@@ -95,17 +95,20 @@
                     <option value="ollama">本地 Ollama</option>
                   </select>
                 </label>
-                <label for="api_key">API 密钥
-                  <input type="password" id="api_key" placeholder="输入 API Key" autocomplete="off" />
-                </label>
-                <div class="credential-actions">
-                  <button type="button" id="save-api-key" class="small-btn primary">保存密钥</button>
-                  <button type="button" id="clear-api-key" class="small-btn secondary">清除</button>
+                <div id="client-api-key-fields">
+                  <label for="api_key">API 密钥
+                    <input type="password" id="api_key" placeholder="输入 API Key" autocomplete="off" />
+                  </label>
+                  <div class="credential-actions">
+                    <button type="button" id="use-api-key" class="small-btn primary">本次使用</button>
+                    <button type="button" id="clear-api-key" class="small-btn secondary">清除</button>
+                  </div>
+                  <p id="api-key-help" class="field-help">请输入你自己的 API Key。仅保留在当前页面内存，刷新即清除；服务端不会写入文件或数据库。</p>
                 </div>
+                <p id="server-api-key-note" class="field-help" hidden>生产模式由服务端注入模型凭据，浏览器不会接收或保存密钥。</p>
                 <label for="DS_BASE_URL">接口地址
                   <input type="text" id="DS_BASE_URL" />
                 </label>
-                <p id="api-key-help" class="field-help">密钥仅保存在当前浏览器，不写入项目文件。共享电脑请勿保存。</p>
                 <p class="field-help">切换服务商会自动填写接口地址和建议模型。</p>
               </div>
             </details>
@@ -139,7 +142,7 @@
         </div>
 
         <div class="composer-actions">
-          <p id="autosave-note">参数在本机处理，生成期间可随时停止。</p>
+          <p id="autosave-note">模型密钥由每位访客自行提供，生成期间可随时停止。</p>
           <div class="action-row">
             <button id="run-btn" type="button">
               <span class="run-label">开始生成</span>

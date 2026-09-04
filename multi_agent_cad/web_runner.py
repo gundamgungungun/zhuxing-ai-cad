@@ -26,6 +26,22 @@ import sys
 from pathlib import Path
 
 
+def _receive_api_key() -> str:
+    """Receive one credential over stdin so it never appears in argv or env."""
+
+    raw = sys.stdin.buffer.readline(4096)
+    if not raw:
+        raise RuntimeError("model service API key was not provided")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("invalid credential payload") from exc
+    api_key = payload.get("api_key") if isinstance(payload, dict) else None
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise RuntimeError("model service API key was not provided")
+    return api_key.strip()
+
+
 def _emit(obj: dict) -> None:
     print(json.dumps(obj), flush=True)
 
@@ -78,6 +94,10 @@ def main() -> int:
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     os.chdir(out)
+
+    # The parent sends the visitor-owned key through an anonymous pipe.  It is
+    # never present in this process's initial environment or command line.
+    os.environ["DASHSCOPE_API_KEY"] = _receive_api_key()
 
     # If the server didn't set MAC_CONFIG_FILE, set it from --config so the
     # runner can also be invoked directly (e.g. for testing without the server).

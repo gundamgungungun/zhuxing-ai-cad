@@ -25,6 +25,8 @@ import sys
 import subprocess
 from pathlib import Path
 
+from multi_agent_cad.execution_security import generated_code_environment
+
 # Ensure the project root is on sys.path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -136,12 +138,14 @@ def node_existing_file_loader(state: GraphState) -> dict:
     # for the autonomous loop's QA.
     print(f"\n  Executing existing script to produce baseline STEP/STL ...")
     try:
-        result = subprocess.run(
-            [sys.executable, str(code_path)],
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        with generated_code_environment() as child_env:
+            result = subprocess.run(
+                [sys.executable, str(code_path)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                env=child_env,
+            )
         if result.returncode == 0:
             print(f"  Initial execution: SUCCESS")
         else:

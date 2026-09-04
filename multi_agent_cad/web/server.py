@@ -20,8 +20,12 @@ Architecture::
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hmac
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -30,6 +34,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+
+from multi_agent_cad.execution_security import sanitized_subprocess_env
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -47,6 +53,28 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Repo root, so the web_runner subprocess (whose cwd is a per-job tempdir)
 # can still `import multi_agent_cad` without a pip-installed package.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+_DEPLOYMENT_MODE = os.environ.get("MAC_DEPLOYMENT_MODE", "local").strip().lower()
+_ALLOW_CLIENT_API_KEY = _env_flag(
+    "MAC_ALLOW_CLIENT_API_KEY", default=_DEPLOYMENT_MODE != "production"
+)
+_TRUST_GATEWAY_AUTH = _env_flag("MAC_TRUST_GATEWAY_AUTH", default=False)
+_BASIC_AUTH_USER = os.environ.get("MAC_BASIC_AUTH_USER", "")
+_BASIC_AUTH_PASSWORD = os.environ.get("MAC_BASIC_AUTH_PASSWORD", "")
+_MAX_ACTIVE_JOBS = max(
+    1,
+    int(os.environ.get("MAC_MAX_ACTIVE_JOBS", "1" if _DEPLOYMENT_MODE == "production" else "2")),
+)
+_MAX_PROMPT_CHARS = max(100, int(os.environ.get("MAC_MAX_PROMPT_CHARS", "10000")))
+_MAX_API_KEY_CHARS = 512
 
 # In-memory job registry (single-user, process-lifetime). A dict is fine
 # because only one user is expected and jobs rarely exceed a handful.
@@ -139,6 +167,155 @@ _PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
+_WEB_CONFIG_FIELDS = {
+    "DS_BASE_URL",
+    "MAX_RETRIES",
+    "MAX_EXEC_RETRIES",
+    "SPEC_PLANNER_MODEL",
+    "SPEC_PLANNER_TEMPERATURE",
+    "SPEC_PLANNER_MAX_TOKENS",
+    "ARCHITECT_MODEL",
+    "ARCHITECT_TEMPERATURE",
+    "ARCHITECT_MAX_TOKENS",
+    "CODER_MODEL",
+    "CODER_TEMPERATURE",
+    "CODER_MAX_TOKENS",
+    "REPAIR_MODEL",
+    "REPAIR_TEMPERATURE",
+    "REPAIR_MAX_TOKENS",
+}
+_RETRY_FIELDS = {"MAX_RETRIES", "MAX_EXEC_RETRIES"}
+_TEMPERATURE_FIELDS = {name for name in _WEB_CONFIG_FIELDS if name.endswith("_TEMPERATURE")}
+_TOKEN_FIELDS = {name for name in _WEB_CONFIG_FIELDS if name.endswith("_MAX_TOKENS")}
+_MODEL_FIELDS = {name for name in _WEB_CONFIG_FIELDS if name.endswith("_MODEL")}
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
+_SECRET_TEXT_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_.-]{8,}\b"),
+    re.compile(r"\bAKLT[A-Za-z0-9]{8,}\b"),
+    re.compile(
+        r"(?i)((?:api[_ -]?key|access[_ -]?key|secret|token|password)\s*[:=]\s*)"
+        r"([^\s,;]+)"
+    ),
+)
+
+
+def _redact_text(value: str) -> str:
+    result = value
+    for pattern in _SECRET_TEXT_PATTERNS:
+        if pattern.groups:
+            result = pattern.sub(r"\1[REDACTED]", result)
+        else:
+            result = pattern.sub("[REDACTED]", result)
+    return result
+
+
+def _redact_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    return value
+
+
+def _allowed_model_base_urls() -> set[str]:
+    allowed = {
+        preset["ds_base_url"].rstrip("/")
+        for name, preset in _PROVIDER_PRESETS.items()
+        if name != "ollama" or _DEPLOYMENT_MODE != "production"
+    }
+    allowed.update(
+        value.strip().rstrip("/")
+        for value in os.environ.get("MAC_ALLOWED_MODEL_BASE_URLS", "").split(",")
+        if value.strip()
+    )
+    return allowed
+
+
+def _validated_web_config(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(400, "config must be an object")
+
+    result: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key not in _WEB_CONFIG_FIELDS:
+            continue
+        if key == "DS_BASE_URL":
+            if not isinstance(value, str):
+                raise HTTPException(400, "DS_BASE_URL must be a string")
+            normalized = value.strip().rstrip("/")
+            if normalized not in _allowed_model_base_urls():
+                raise HTTPException(400, "model service URL is not in the server allowlist")
+            result[key] = normalized
+        elif key in _RETRY_FIELDS:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{key} must be an integer") from None
+            upper = 5 if key == "MAX_RETRIES" else 3
+            if not 0 <= number <= upper:
+                raise HTTPException(400, f"{key} must be between 0 and {upper}")
+            result[key] = number
+        elif key in _TEMPERATURE_FIELDS:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{key} must be numeric") from None
+            if not 0 <= number <= 2:
+                raise HTTPException(400, f"{key} must be between 0 and 2")
+            result[key] = number
+        elif key in _TOKEN_FIELDS:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{key} must be an integer") from None
+            if not 256 <= number <= 65536:
+                raise HTTPException(400, f"{key} must be between 256 and 65536")
+            result[key] = number
+        elif key in _MODEL_FIELDS:
+            if not isinstance(value, str) or not _MODEL_NAME_RE.fullmatch(value.strip()):
+                raise HTTPException(400, f"{key} contains unsupported characters")
+            result[key] = value.strip()
+    return result
+
+
+def _validate_startup_configuration() -> None:
+    if bool(_BASIC_AUTH_USER) != bool(_BASIC_AUTH_PASSWORD):
+        raise RuntimeError("MAC_BASIC_AUTH_USER and MAC_BASIC_AUTH_PASSWORD must be set together")
+    if _DEPLOYMENT_MODE != "production":
+        return
+    if _ALLOW_CLIENT_API_KEY:
+        return
+    if not os.environ.get("DASHSCOPE_API_KEY", "").strip():
+        raise RuntimeError(
+            "DASHSCOPE_API_KEY is required when client-provided keys are disabled"
+        )
+    if not _TRUST_GATEWAY_AUTH and not (_BASIC_AUTH_USER and _BASIC_AUTH_PASSWORD):
+        raise RuntimeError(
+            "production mode requires Basic Auth credentials or MAC_TRUST_GATEWAY_AUTH=true"
+        )
+
+
+def _resolve_api_key(body: dict[str, Any]) -> str:
+    """Resolve a per-request key without silently falling back to an owner key."""
+
+    if _ALLOW_CLIENT_API_KEY:
+        raw = body.pop("api_key", None)
+        if not isinstance(raw, str) or not raw.strip():
+            raise HTTPException(400, "please enter your own model service API key")
+        api_key = raw.strip()
+        if len(api_key) > _MAX_API_KEY_CHARS or any(ord(char) < 32 for char in api_key):
+            raise HTTPException(400, "invalid model service API key")
+        return api_key
+
+    api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(503, "model service credential is not configured")
+    return api_key
+
 
 def _config_schema() -> dict:
     """Return editable config fields with current defaults from config.py."""
@@ -163,6 +340,7 @@ def _config_schema() -> dict:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _validate_startup_configuration()
     cleanup_task = asyncio.create_task(_cleanup_loop())
     try:
         yield
@@ -173,6 +351,37 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="铸形 FormForge Studio", lifespan=_lifespan)
 
 
+def _basic_auth_matches(header: str) -> bool:
+    if not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+    return hmac.compare_digest(username, _BASIC_AUTH_USER) and hmac.compare_digest(
+        password, _BASIC_AUTH_PASSWORD
+    )
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    if request.url.path != "/api/health" and _BASIC_AUTH_USER:
+        if not _basic_auth_matches(request.headers.get("authorization", "")):
+            return JSONResponse(
+                {"detail": "authentication required"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="FormForge"'},
+            )
+
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"status": "ok"}
@@ -180,22 +389,46 @@ async def health() -> dict:
 
 @app.get("/api/config/schema")
 async def get_schema() -> dict:
-    return {"config": _config_schema(), "providers": _PROVIDER_PRESETS}
+    return {
+        "config": _config_schema(),
+        "providers": _PROVIDER_PRESETS,
+        "security": {
+            "allow_client_api_key": _ALLOW_CLIENT_API_KEY,
+            "server_api_key_configured": bool(os.environ.get("DASHSCOPE_API_KEY", "").strip()),
+            "deployment_mode": _DEPLOYMENT_MODE,
+        },
+    }
 
 
 @app.post("/api/run")
 async def run(req: Request) -> dict:
-    body = await req.json()
-    config = body.get("config", {}) or {}
-    prompt = (body.get("prompt") or config.get("USER_REQUEST", "") or "").strip()
-    dest_path = (body.get("dest_path") or "").strip()
-    workflow = body.get("workflow") or config.get("WORKFLOW_ID", "original")
-    api_key = body.get("api_key", "") or config.get("DS_API_KEY", "")
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(400, "request body must be valid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "request body must be an object")
 
+    config = _validated_web_config(body.get("config", {}))
+    prompt = (body.get("prompt") or config.get("USER_REQUEST", "") or "").strip()
+    workflow = body.get("workflow") or config.get("WORKFLOW_ID", "original")
     if not prompt:
         raise HTTPException(400, "prompt is required")
-    if not api_key:
-        raise HTTPException(400, "api_key is required (fill it in the form)")
+    if len(prompt) > _MAX_PROMPT_CHARS:
+        raise HTTPException(400, f"prompt exceeds {_MAX_PROMPT_CHARS} characters")
+    if workflow not in {"original", "aider"}:
+        raise HTTPException(400, "unsupported workflow")
+    if body.get("dest_path"):
+        raise HTTPException(400, "server-side destination paths are not supported")
+
+    api_key = _resolve_api_key(body)
+    active_jobs = sum(
+        1
+        for job in _JOBS.values()
+        if job.get("proc") is not None and job["proc"].returncode is None
+    )
+    if active_jobs >= _MAX_ACTIVE_JOBS:
+        raise HTTPException(429, "the service is at its active-job limit; retry later")
 
     job_id = uuid.uuid4().hex[:12]
     tempdir = Path(tempfile.mkdtemp(prefix=f"macjob_{job_id}_"))
@@ -208,17 +441,18 @@ async def run(req: Request) -> dict:
     config_path = tempdir / "config.json"
     config_path.write_text(json.dumps(cfg_out, indent=2), encoding="utf-8")
 
-    env = {
-        **os.environ,
+    env = sanitized_subprocess_env(
+        os.environ,
+        extra={
         "MAC_CONFIG_FILE": str(config_path),
-        "DASHSCOPE_API_KEY": api_key,
         "PYTHONUNBUFFERED": "1",
         # The subprocess cwd is the per-job tempdir (isolation), not the
         # project root — and the package may not be pip-installed in the
         # venv (editable install). Add the repo root to sys.path so the
         # runner can `import multi_agent_cad` from anywhere.
         "PYTHONPATH": str(_REPO_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
-    }
+        },
+    )
 
     cmd = [
         sys.executable, "-m", "multi_agent_cad.web_runner",
@@ -229,18 +463,24 @@ async def run(req: Request) -> dict:
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env=env,
         cwd=str(tempdir),
     )
+    assert proc.stdin is not None
+    try:
+        proc.stdin.write((json.dumps({"api_key": api_key}) + "\n").encode("utf-8"))
+        await proc.stdin.drain()
+    finally:
+        proc.stdin.close()
+        api_key = ""
 
     queue: asyncio.Queue = asyncio.Queue()
     job: dict[str, Any] = {
         "proc": proc,
         "tempdir": tempdir,
-        "dest_path": dest_path or None,
         "queue": queue,
         "result": None,
         "started_at": time.time(),
@@ -301,7 +541,7 @@ async def _reader_task(job_id: str, job: dict) -> None:
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
-                await queue.put({"log": line})
+                await queue.put({"log": _redact_text(line)})
                 continue
             if not isinstance(msg, dict):
                 # The subprocess (web_runner + LangGraph / aider / build123d)
@@ -310,11 +550,10 @@ async def _reader_task(job_id: str, job: dict) -> None:
                 # aider echoing a JSON literal mid-repair. Treat them as log
                 # lines so the SSE stream keeps flowing instead of crashing
                 # the reader on `msg.get("done")`.
-                await queue.put({"log": line})
+                await queue.put({"log": _redact_text(line)})
                 continue
+            msg = _redact_payload(msg)
             if msg.get("done"):
-                if job.get("dest_path"):
-                    _copy_artifacts(msg, job["dest_path"])
                 job["result"] = msg
                 await queue.put(msg)
                 break
@@ -326,8 +565,6 @@ async def _reader_task(job_id: str, job: dict) -> None:
                 # User clicked Stop — emit a synthetic 'done' from whatever's
                 # on disk so the UI can offer downloads of half-finished work.
                 msg = _harvest_intermediate(job)
-                if job.get("dest_path"):
-                    _copy_artifacts(msg, job["dest_path"])
                 job["result"] = msg
                 await queue.put(msg)
             else:
@@ -413,21 +650,6 @@ async def _watcher_task(job_id: str, job: dict) -> None:
             "intermediate": True,
             "glb": f"/api/jobs/{job_id}/files/live.glb?t={ts}",
         })
-
-
-def _copy_artifacts(result: dict, dest: str) -> None:
-    """Copy generated artifacts to the user-specified server-side path (req #2)."""
-    try:
-        dest_path = Path(dest)
-        dest_path.mkdir(parents=True, exist_ok=True)
-        for key in ("step", "stl", "glb", "py", "measurements", "missed"):
-            src = result.get(key)
-            if src:
-                p = Path(src)
-                if p.is_file():
-                    shutil.copy2(p, dest_path / p.name)
-    except Exception as exc:  # non-fatal — main result already captured
-        print(f"[web] copy artifacts to {dest} failed: {exc}", file=sys.stderr)
 
 
 def _harvest_intermediate(job: dict) -> dict:

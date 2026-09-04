@@ -103,6 +103,7 @@ from multi_agent_cad.config import (
 
 # API key lives in config.py (DS_API_KEY). Imported alongside other config.
 from multi_agent_cad.config import DS_API_KEY as _HARDCODED_API_KEY
+from multi_agent_cad.execution_security import generated_code_environment
 
 
 def _llm_client() -> OpenAI:
@@ -2745,14 +2746,16 @@ def node_python_coder(state: GraphState) -> dict:
     # 7. Execute the script
     # ------------------------------------------------------------------
     try:
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=_CFG_LLM_API_TIMEOUT,  # configurable via config.py
-            cwd=str(cwd),
-        )
+        with generated_code_environment(extra={"ITERATION": str(iteration)}) as child_env:
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=_CFG_LLM_API_TIMEOUT,  # configurable via config.py
+                cwd=str(cwd),
+                env=child_env,
+            )
     except subprocess.TimeoutExpired:
         return _coder_failure_state(
             iteration=iteration,
@@ -6402,15 +6405,17 @@ def _execute_cad_script(
     print(f"[EXECUTE CAD] Running: {script_path.name}")
 
     try:
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            cwd=str(cwd),
-        )
+        with generated_code_environment() as child_env:
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                cwd=str(cwd),
+                env=child_env,
+            )
     except subprocess.TimeoutExpired:
         print(f"[EXECUTE CAD] Timed out after {timeout}s")
         return False, f"Script execution timed out after {timeout} seconds."

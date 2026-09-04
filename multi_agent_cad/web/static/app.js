@@ -33,26 +33,26 @@ const STATE_LABELS = {
   error: "需处理",
 };
 
-const API_KEY_STORAGE_KEY = "formforge.api_key.v1";
-const LEGACY_API_KEY_STORAGE_KEYS = ["zihan_cad.api_key.v1", "mac.api_key.v1"];
+const LEGACY_API_KEY_STORAGE_KEYS = [
+  "formforge.api_key.v1",
+  "zihan_cad.api_key.v1",
+  "mac.api_key.v1",
+];
 
 let providers = {};
+let allowClientApiKey = true;
 let currentJobId = null;
 let activeStage = null;
 let runStartedAt = null;
 let elapsedTimer = null;
 
-function readSavedApiKey() {
+function clearLegacySavedApiKeys() {
   try {
-    const current = window.localStorage.getItem(API_KEY_STORAGE_KEY);
-    if (current) return current;
     for (const key of LEGACY_API_KEY_STORAGE_KEYS) {
-      const legacy = window.localStorage.getItem(key);
-      if (legacy) return legacy;
+      window.localStorage.removeItem(key);
     }
-    return "";
   } catch {
-    return "";
+    // Storage may be unavailable; the key still remains page-memory only.
   }
 }
 
@@ -196,7 +196,7 @@ function updateApiKeyStatus(saved, message = "") {
   status.textContent = message || (saved ? "✓ 已保存" : "未保存");
 }
 
-function saveApiKey(apiKey, { collapse = true } = {}) {
+function confirmApiKey(apiKey, { collapse = true } = {}) {
   const normalized = apiKey.trim();
   if (!normalized) {
     updateApiKeyStatus(false, "请先输入密钥");
@@ -206,35 +206,10 @@ function saveApiKey(apiKey, { collapse = true } = {}) {
     return false;
   }
 
-  try {
-    window.localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-  } catch {
-    updateApiKeyStatus(false, "浏览器禁止保存");
-    return false;
-  }
-
   document.getElementById("api_key").value = normalized;
-  updateApiKeyStatus(true);
+  updateApiKeyStatus(true, "✓ 本次页面已输入");
   if (collapse) document.getElementById("api-settings").open = false;
   return true;
-}
-
-function restoreApiKey() {
-  const saved = readSavedApiKey();
-  if (saved) {
-    try {
-      if (!window.localStorage.getItem(API_KEY_STORAGE_KEY)) {
-        window.localStorage.setItem(API_KEY_STORAGE_KEY, saved);
-      }
-    } catch {
-      // The already-restored key still works for this page load.
-    }
-    document.getElementById("api_key").value = saved;
-    updateApiKeyStatus(true);
-  } else {
-    updateApiKeyStatus(false);
-  }
-  document.getElementById("api-settings").open = false;
 }
 
 async function loadSchema() {
@@ -243,6 +218,12 @@ async function loadSchema() {
   const d = await r.json();
   const cfg = d.config;
   providers = d.providers;
+  allowClientApiKey = d.security?.allow_client_api_key !== false;
+
+  const clientKeyFields = document.getElementById("client-api-key-fields");
+  const serverKeyNote = document.getElementById("server-api-key-note");
+  clientKeyFields.hidden = !allowClientApiKey;
+  serverKeyNote.hidden = allowClientApiKey;
 
   document.getElementById("DS_BASE_URL").value = cfg.DS_BASE_URL;
   document.getElementById("prompt").value = cfg.USER_REQUEST;
@@ -270,7 +251,17 @@ async function loadSchema() {
     inp.addEventListener("input", () => { inp.dataset.customized = "1"; });
   }
 
-  restoreApiKey();
+  if (allowClientApiKey) {
+    clearLegacySavedApiKeys();
+    updateApiKeyStatus(false, "每次访问需输入");
+    document.getElementById("api-settings").open = true;
+  } else {
+    updateApiKeyStatus(
+      Boolean(d.security?.server_api_key_configured),
+      d.security?.server_api_key_configured ? "✓ 服务端已配置" : "服务端未配置",
+    );
+    document.getElementById("api-settings").open = false;
+  }
 }
 
 document.getElementById("prompt").addEventListener("input", () => {
@@ -281,13 +272,12 @@ document.getElementById("prompt").addEventListener("input", () => {
   }
 });
 
-document.getElementById("save-api-key").addEventListener("click", () => {
-  saveApiKey(document.getElementById("api_key").value);
+document.getElementById("use-api-key").addEventListener("click", () => {
+  confirmApiKey(document.getElementById("api_key").value);
 });
 
 document.getElementById("clear-api-key").addEventListener("click", () => {
   try {
-    window.localStorage.removeItem(API_KEY_STORAGE_KEY);
     for (const key of LEGACY_API_KEY_STORAGE_KEYS) {
       window.localStorage.removeItem(key);
     }
@@ -301,13 +291,10 @@ document.getElementById("clear-api-key").addEventListener("click", () => {
 
 document.getElementById("api_key").addEventListener("input", () => {
   const current = document.getElementById("api_key").value.trim();
-  const saved = readSavedApiKey();
   if (!current) {
-    updateApiKeyStatus(false, saved ? "修改中" : "未保存");
-  } else if (current === saved) {
-    updateApiKeyStatus(true);
+    updateApiKeyStatus(false, "未输入");
   } else {
-    updateApiKeyStatus(false, "修改未保存");
+    updateApiKeyStatus(true, "✓ 本次页面已输入");
   }
 });
 
@@ -330,15 +317,16 @@ document.getElementById("run-btn").addEventListener("click", async () => {
     return;
   }
 
-  const apiKey = document.getElementById("api_key").value.trim() || readSavedApiKey();
-  if (!apiKey) {
-    updateApiKeyStatus(false, "请先输入密钥");
-    document.getElementById("api-settings").open = true;
-    document.getElementById("api_key").focus();
-    return;
+  let apiKey = "";
+  if (allowClientApiKey) {
+    apiKey = document.getElementById("api_key").value.trim();
+    if (!apiKey) {
+      updateApiKeyStatus(false, "请先输入密钥");
+      document.getElementById("api-settings").open = true;
+      document.getElementById("api_key").focus();
+      return;
+    }
   }
-
-  saveApiKey(apiKey);
 
   const config = {
     DS_BASE_URL: document.getElementById("DS_BASE_URL").value,
@@ -354,10 +342,9 @@ document.getElementById("run-btn").addEventListener("click", async () => {
   const body = {
     config,
     prompt: prompt.value.trim(),
-    api_key: apiKey,
     workflow: document.getElementById("workflow").value,
-    dest_path: document.getElementById("dest_path").value,
   };
+  if (allowClientApiKey) body.api_key = apiKey;
 
   const log = document.getElementById("log");
   const runBtn = document.getElementById("run-btn");
